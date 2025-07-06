@@ -1,3 +1,6 @@
 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
 
 All_rights fine grained token: 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
+
+Classic token:
+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
