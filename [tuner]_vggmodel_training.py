@@ -27,11 +27,12 @@ import tempfile
 
 
 TARGET_LABELS = ["逢", "謬", "雄", "醋", "餡", "陪", "跎", "隆", "阜", "辟", "鄧", "詭", "踢", "黎", "遞", "跑", "馱", "雁", "酊", "迪", "鏍", "訐", "這", "裹", "鍊", "霾", "鄰", "詔", "辨", "錳", "辯", "鯉", "霑", "首", "賤", "鄂", "賒", "適", "黨", "部", "頰", "露", "陛", "賊", "鳴", "魄", "諫", "覦", "讒", "赫"]
-EXPERIMENT_DIR = "/content/image_classification_experiments"
+EXPERIMENT_DIR = "/home/slrlab_guest/Documents/xhwang_tuning/tuneVGG/trials"
 EXPERIMENT_NAME = "VGG_experiments"
-DATA_DIR = "/content/data/DetectChineseCharacters"
-RESROUCES = {"cpu": 2, "gpu": 0.2}
-MAX_COUNCURRENT_TRIALS = 5
+DATA_DIR = "/home/slrlab_guest/Documents/xhwang_tuning/tuneVGG/DetectChineseCharacters"
+RESROUCES = {"cpu": 7, "gpu": 1}
+MAX_COUNCURRENT_TRIALS = 4
+# EARLY_STOP_ACC = 0.99
 
 def split_dataset(base_dir, train_ratio = 0.7):
     """
