@@ -14,6 +14,7 @@ from ray import tune
 from ray.train import Checkpoint, get_checkpoint
 from ray.tune.schedulers import ASHAScheduler
 from ray.tune.search import hyperopt
+from ray.train.torch import TorchTrainer
 
 from typing import List, Tuple
 from tqdm import tqdm
@@ -31,15 +32,14 @@ EXPERIMENT_NAME = "VGG_experiments"
 DATA_DIR = "/content/data/DetectChineseCharacters"
 RESROUCES = {"cpu": 2, "gpu": 0.2}
 MAX_COUNCURRENT_TRIALS = 5
-EARLY_STOP_ACC = 0.99
 
-def split_dataset(base_dir, train_ratio=0.7):
+def split_dataset(base_dir, train_ratio = 0.7):
     """
     Splits images from class subdirectories into train/test sets.
 
     Args:
         base_dir (str): Path to the dataset directory (e.g., "/content/data")
-        train_ratio (float): Proportion of images for training (default=0.7)
+        train_ratio (float): Proportion of images for training (default =0.7)
     """
     # Define paths for train and test directories
     train_dir = os.path.join(f"{base_dir}_split", "train")
@@ -66,8 +66,8 @@ def split_dataset(base_dir, train_ratio=0.7):
         # Prepare destination directories
         train_class_dir = os.path.join(train_dir, class_name)
         test_class_dir = os.path.join(test_dir, class_name)
-        os.makedirs(train_class_dir, exist_ok=True)
-        os.makedirs(test_class_dir, exist_ok=True)
+        os.makedirs(train_class_dir, exist_ok = True)
+        os.makedirs(test_class_dir, exist_ok = True)
 
         # Get all image files
         images = [f for f in os.listdir(class_path)
@@ -106,10 +106,10 @@ def data_deploy(image_folder: os.PathLike):
         os.mkdir(sample_folder_path)
         for folder in target_folders:
             os.system(f"cp -r {folder} {sample_folder_path}")
-        
+
     except FileExistsError:
         pass
-    
+
     # Usage
     split_datadir = split_dataset(image_folder)
     return split_datadir, sample_folder_path
@@ -123,24 +123,24 @@ def create_dataloaders(data_dir:str,
                        random_seed: int = 42) -> Tuple[DataLoader, DataLoader, List]:
     data_train_list = []
     for data_transforms in transforms_list:
-        data_train = torchvision.datasets.ImageFolder(f"{data_dir}/train", transform=data_transforms)
+        data_train = torchvision.datasets.ImageFolder(f"{data_dir}/train", transform = data_transforms)
         data_train_list.append(data_train)
     data_train = torchtune.datasets.ConcatDataset(data_train_list)
-    data_test = torchvision.datasets.ImageFolder(f"{data_dir}/test", transform=val_transforms)
+    data_test = torchvision.datasets.ImageFolder(f"{data_dir}/test", transform = val_transforms)
     label_names = data_test.classes
     train_dataloader = DataLoader(
         data_train,
         batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
+        shuffle = True,
+        num_workers = num_workers,
+        pin_memory = True,
     )
     test_dataloader = DataLoader(
         data_test,
         batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
+        shuffle = True,
+        num_workers = num_workers,
+        pin_memory = True,
     )
 
     return train_dataloader, test_dataloader, label_names
@@ -157,7 +157,7 @@ class pure_background_transforms(nn.Module):
         return new_img
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(random_seed={self.random_seed})"
+        return f"{self.__class__.__name__}(random_seed = {self.random_seed})"
 
 class noise_background_transforms(nn.Module):
     def __init__(self, *args, **kwargs):
@@ -174,18 +174,18 @@ class noise_background_transforms(nn.Module):
 def transformsGenerator(zoom: bool, rotation: bool, background: str, gray_scale: bool = False):
     transforms_sequence = [
         torchvision.transforms.ToTensor(),
-        torchvision.transforms.Grayscale(num_output_channels=3),
+        torchvision.transforms.Grayscale(num_output_channels = 3),
     ]
     if zoom:
         transforms_sequence.append(
-            torchvision.transforms.v2.RandomZoomOut(fill=1, side_range=(1.0, 1.5), p=0.5) # Why I cannot use 255 here?
+            torchvision.transforms.v2.RandomZoomOut(fill = 1, side_range = (1.0, 1.5), p = 0.5) # Why I cannot use 255 here?
         )
-    
+
     if rotation:
         transforms_sequence.append(
             torchvision.transforms.RandomRotation(degrees=(-60, 60), fill=1)
         )
-    
+
     if background == "pure":
         transforms_sequence.append(
             pure_background_transforms(),
@@ -198,12 +198,12 @@ def transformsGenerator(zoom: bool, rotation: bool, background: str, gray_scale:
             pass
     else:
         raise ValueError(f"background must be one of \"pure\", \"noise\", \"origin\", but got {background}")
-    
+
     transforms_sequence.append(torchvision.transforms.Resize((224, 224))) # The image is 50*50 originally. GaussianBlur destroy image details
-    
+
     if gray_scale:
         transforms_sequence.append(torchvision.transforms.Grayscale(num_output_channels=1))
-    
+
     return torchvision.transforms.Compose(transforms_sequence)
 
 class modelTrainer():
@@ -223,9 +223,11 @@ class modelTrainer():
         self.optimizer = optimizer
         self.device = device
 
-    def train_step(self, testing: bool=False) -> Tuple[float, float]:
+    def train_step(self, device: torch.device | None = None, testing: bool = False) -> Tuple[float, float]:
         # Set model to train mode & move model to device
-        self.model = self.model.to(self.device)
+        if not device:
+            device = self.device
+        self.model = self.model.to(device)
         self.model.train()
         train_loss, train_acc = 0, 0 # Epoch-level loss & acc
 
@@ -233,7 +235,7 @@ class modelTrainer():
         count = 0
         for data_batch, label_batch in tqdm(self.train_dataloader, desc="Training"):
             # Move data to device
-            data_batch, label_batch = data_batch.to(self.device), label_batch.to(self.device)
+            data_batch, label_batch = data_batch.to(device), label_batch.to(device)
             # Forward pass
             label_probs = self.model(data_batch)
             # Loss calculation
@@ -257,14 +259,16 @@ class modelTrainer():
         train_loss /= count
         return train_acc, train_loss
 
-    def test_step(self, testing: bool=False):
-        self.model.to(self.device)
+    def test_step(self, device: torch.device | None = None, testing: bool = False):
+        if not device:
+            device = self.device
+        self.model.to(device)
         self.model.eval()
         test_loss, test_acc = 0, 0
         count = 0
         with torch.inference_mode():
             for data_batch, label_batch in tqdm(self.test_dataloader, desc="Testing"):
-                data_batch, label_batch = data_batch.to(self.device), label_batch.to(self.device)
+                data_batch, label_batch = data_batch.to(device), label_batch.to(device)
                 label_probs = self.model(data_batch)
                 loss = self.loss_fn(label_probs, label_batch)
                 test_loss+=loss.item()
@@ -367,7 +371,7 @@ class VGGmodel(nn.Module):
         x = self.classifier(x)
         return x
 
-def train_model(config, data_dir=None):
+def train_model(config, data_dir = None):
     zoom = True
     rotation = True
     backgrounds = config["background_augmentation"]
@@ -387,9 +391,6 @@ def train_model(config, data_dir=None):
     in_channels=1 # Fixed
 
     vgg_model = VGGmodel(len(label_names), conv_block_count, dense_layer_count, num_units, in_channels)
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    vgg_model.to(device)
 
     loss_fn = nn.CrossEntropyLoss()
     lr = config["lr"]
@@ -414,8 +415,10 @@ def train_model(config, data_dir=None):
     epochs = 500
     for i in range(start_epoch, epochs):
         print(f"\033[96m[INFO]\033[0mEpoch {i} starts")
-        train_loss, train_acc = mytrainer.train_step()
-        test_loss, test_acc = mytrainer.test_step()
+        device = ray.train.torch.get_device() if torch.cuda.is_available() else "cpu" # For tune across multiple gpus in ray tune
+        train_loss, train_acc = mytrainer.train_step(device = device)
+        device = ray.train.torch.get_device() if torch.cuda.is_available() else "cpu"
+        test_loss, test_acc = mytrainer.test_step(device = device)
         print(f"\033[96m[INFO]\033[0mEpoch {i} results: ", end = "")
         print(f"Train loss: {train_loss} | Train acc: {train_acc} | Test loss: {test_loss} | Test acc: \033[96m{test_acc}\033[0m")
         results = {"epoch": i, "test_accuracy": test_acc, "test_loss": test_loss, "train_accuracy": train_acc, "train_loss": train_loss}
@@ -428,14 +431,14 @@ def train_model(config, data_dir=None):
         with tempfile.TemporaryDirectory() as tempdir:
             torch.save(checkpoint_data, os.path.join(tempdir, "checkpoint.pt"))
             checkpoint = Checkpoint.from_directory(tempdir)
-            ray.train.report(results, checkpoint=checkpoint) # ray.tune.report is for older version
+            ray.train.report(results, checkpoint = checkpoint) # ray.tune.report is for older version
         print(f"\033[96m[INFO]\033[0mCheckpoint reported")
 
 def main():
     ray.shutdown()
-    ray.init()    
+    ray.init()
     split_datadir, sample_datadir = data_deploy(DATA_DIR)
-    
+
     config = {
         "conv_block_count": tune.choice([1, 2, 3, 4]), # >5 image becomes 0
         "dense_layer_count": tune.choice([1, 2, 3, 4]),
@@ -445,35 +448,39 @@ def main():
         "lr": tune.loguniform(1e-6, 1e-3),
         "data_dir": split_datadir,
         }
-    
-    scheduler = ASHAScheduler(    
-            time_attr="epoch",    
+
+    scheduler = ASHAScheduler(
+            time_attr="epoch",
             max_t=500, # Each trial should be trained with 100 times at most
             grace_period=10,
             reduction_factor=2, # The aggressiveness of trial pruning. At each halving stage, only the top 1/reduction_factor (top 50% here) of trials continue. Higher values prune more aggressively.
-        )     
-    
+        )
+
     init_searchalg = hyperopt.HyperOptSearch(metric="test_accuracy")
     storage_dir = os.path.join(EXPERIMENT_DIR, EXPERIMENT_NAME)
     try:
         init_searchalg.restore_from_dir(os.path.join(EXPERIMENT_DIR, EXPERIMENT_NAME))
     except Exception as e:
         print(f"\033[31m[WARNING]\033[0m Attempt to restore *searchalg* failed, with error msg: {e}")
-    
+
     tuner = None
     try:
-        tuner = tune.Tuner.restore(os.path.join(EXPERIMENT_DIR, EXPERIMENT_NAME), 
+        tuner = tune.Tuner.restore(os.path.join(EXPERIMENT_DIR, EXPERIMENT_NAME),
                                    trainable=partial(train_model, data_dir=split_datadir),
                                    )
     except Exception as e:
         print(f"\033[31m[WARNING]\033[0m Attempt to restore *tuner* failed, with error msg: {e}")
-    
+
     if not tuner:
-        tuner = tune.Tuner(
-            tune.with_resources(
-                tune.with_parameters(partial(train_model, data_dir=split_datadir)),
+        trainer = TorchTrainer(
+            train_loop_per_worker=tune.with_resources(
+                partial(train_model, data_dir=split_datadir),
                 resources=RESROUCES, # This is resources per trial. If too much resources are allocated, ray won't allocate any resources
             ),
+            scaling_config=ray.train.ScalingConfig(num_workers=4, use_gpu=True),
+        )
+        tuner = tune.Tuner(
+            trainable=trainer,            
             param_space=config, # Use either random sampling primitives to specify distribution or use grid search
             run_config=tune.RunConfig(
                 storage_path=storage_dir,
@@ -488,11 +495,11 @@ def main():
                 scheduler=scheduler, # Use scheduler to manage stopping
                 metric='test_accuracy',
                 mode='max',
-                max_concurrent_trials=MAX_COUNCURRENT_TRIALS, 
+                max_concurrent_trials=MAX_COUNCURRENT_TRIALS,
             ),
         )
     results = tuner.fit()
-    
+
     best_result = results.get_best_result(metric="test_accuracy", mode="max")
     print(f"Best trial config: {best_result.config}")
     print(f"Best trial final metrics: {best_result.metrics}")
@@ -505,4 +512,3 @@ if __name__ == "__main__":
         experiment_result_pth = os.path.join(EXPERIMENT_DIR, EXPERIMENT_NAME)
         zip_pth = os.path.join(EXPERIMENT_DIR, f"{EXPERIMENT_NAME}.tar")
         shutil.make_archive(zip_pth, "tar", experiment_result_pth)
-    
