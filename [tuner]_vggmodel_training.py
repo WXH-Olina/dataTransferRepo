@@ -28,7 +28,7 @@ import tempfile
 TARGET_LABELS = ["逢", "謬", "雄", "醋", "餡", "陪", "跎", "隆", "阜", "辟", "鄧", "詭", "踢", "黎", "遞", "跑", "馱", "雁", "酊", "迪", "鏍", "訐", "這", "裹", "鍊", "霾", "鄰", "詔", "辨", "錳", "辯", "鯉", "霑", "首", "賤", "鄂", "賒", "適", "黨", "部", "頰", "露", "陛", "賊", "鳴", "魄", "諫", "覦", "讒", "赫"]
 EXPERIMENT_DIR = "/content/image_classification_experiments"
 EXPERIMENT_NAME = "VGG_experiments"
-DATA_DIR = "/content/DetectChineseCharacters"
+DATA_DIR = "/content/data/DetectChineseCharacters"
 RESROUCES = {"cpu": 2, "gpu": 0.2}
 MAX_COUNCURRENT_TRIALS = 5
 EARLY_STOP_ACC = 0.99
@@ -197,7 +197,7 @@ def transformsGenerator(zoom: bool, rotation: bool, background: str, gray_scale:
     elif background == "origin":
             pass
     else:
-        raise ValueError(f"background must be one of "pure", "noise", "origin", but got {background}")
+        raise ValueError(f"background must be one of \"pure\", \"noise\", \"origin\", but got {background}")
     
     transforms_sequence.append(torchvision.transforms.Resize((224, 224))) # The image is 50*50 originally. GaussianBlur destroy image details
     
@@ -410,7 +410,7 @@ def train_model(config, data_dir=None):
         start_epoch = 0
 
     # zoom: bool, rotation: bool, background: str, gray_scale: bool = False):
-    mytrainer = modelTrainer(vgg_model, train_dataloader, test_dataloader, device, loss_fn, optimizer, len(label_names))
+    mytrainer = modelTrainer(vgg_model, train_dataloader, test_dataloader, device, loss_fn, optimizer)
     epochs = 500
     for i in range(start_epoch, epochs):
         print(f"\033[96m[INFO]\033[0mEpoch {i} starts")
@@ -458,7 +458,7 @@ def main():
     try:
         init_searchalg.restore_from_dir(os.path.join(EXPERIMENT_DIR, EXPERIMENT_NAME))
     except Exception as e:
-        print(f"\033[31m[WARNING]\033\0m Attempt to restore *searchalg* failed, with error msg: {e}")
+        print(f"\033[31m[WARNING]\033[0m Attempt to restore *searchalg* failed, with error msg: {e}")
     
     tuner = None
     try:
@@ -466,7 +466,7 @@ def main():
                                    trainable=partial(train_model, data_dir=split_datadir),
                                    )
     except Exception as e:
-        print(f"\033[31m[WARNING]\033\0m Attempt to restore *tuner* failed, with error msg: {e}")
+        print(f"\033[31m[WARNING]\033[0m Attempt to restore *tuner* failed, with error msg: {e}")
     
     if not tuner:
         tuner = tune.Tuner(
@@ -505,5 +505,4 @@ if __name__ == "__main__":
         experiment_result_pth = os.path.join(EXPERIMENT_DIR, EXPERIMENT_NAME)
         zip_pth = os.path.join(EXPERIMENT_DIR, f"{EXPERIMENT_NAME}.tar")
         shutil.make_archive(zip_pth, "tar", experiment_result_pth)
-    
     
