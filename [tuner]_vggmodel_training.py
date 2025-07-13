@@ -15,6 +15,7 @@ from ray.train import Checkpoint, get_checkpoint
 from ray.tune.schedulers import ASHAScheduler
 from ray.tune.search import hyperopt
 from ray.train.torch import TorchTrainer
+from ray.tune.integration.ray_train import TuneReportCallback
 
 from typing import List, Tuple
 from tqdm import tqdm
@@ -23,16 +24,17 @@ import random
 import matplotlib.pyplot as plt
 import shutil
 import tempfile
+import logging
 
 
 
 TARGET_LABELS = ["逢", "謬", "雄", "醋", "餡", "陪", "跎", "隆", "阜", "辟", "鄧", "詭", "踢", "黎", "遞", "跑", "馱", "雁", "酊", "迪", "鏍", "訐", "這", "裹", "鍊", "霾", "鄰", "詔", "辨", "錳", "辯", "鯉", "霑", "首", "賤", "鄂", "賒", "適", "黨", "部", "頰", "露", "陛", "賊", "鳴", "魄", "諫", "覦", "讒", "赫"]
-EXPERIMENT_DIR = "/home/slrlab_guest/Documents/xhwang_tuning/tuneVGG/trials"
+EXPERIMENT_DIR = "/content/image_classification_experiments"
 EXPERIMENT_NAME = "VGG_experiments"
-DATA_DIR = "/home/slrlab_guest/Documents/xhwang_tuning/tuneVGG/DetectChineseCharacters"
-RESROUCES = {"cpu": 7, "gpu": 1}
-MAX_COUNCURRENT_TRIALS = 4
-# EARLY_STOP_ACC = 0.99
+DATA_DIR = "/content/data/DetectChineseCharacters"
+RESROUCES = {"cpu": 0.5, "gpu": 0.1}
+MAX_COUNCURRENT_TRIALS = 1
+NUM_WORKER_PER_TRIAL = 0.1
 
 def split_dataset(base_dir, train_ratio = 0.7):
     """
@@ -372,7 +374,8 @@ class VGGmodel(nn.Module):
         x = self.classifier(x)
         return x
 
-def train_model(config, data_dir = None):
+def train_fn_per_worker(config, data_dir = None):
+    print("[INFO] train_fn_per_worker starts.")
     zoom = True
     rotation = True
     backgrounds = config["background_augmentation"]
@@ -416,8 +419,10 @@ def train_model(config, data_dir = None):
     epochs = 500
     for i in range(start_epoch, epochs):
         print(f"\033[96m[INFO]\033[0mEpoch {i} starts")
+        # Set up the device to use
         device = ray.train.torch.get_device() if torch.cuda.is_available() else "cpu" # For tune across multiple gpus in ray tune
         train_loss, train_acc = mytrainer.train_step(device = device)
+        # Set up the device to use
         device = ray.train.torch.get_device() if torch.cuda.is_available() else "cpu"
         test_loss, test_acc = mytrainer.test_step(device = device)
         print(f"\033[96m[INFO]\033[0mEpoch {i} results: ", end = "")
@@ -435,18 +440,37 @@ def train_model(config, data_dir = None):
             ray.train.report(results, checkpoint = checkpoint) # ray.tune.report is for older version
         print(f"\033[96m[INFO]\033[0mCheckpoint reported")
 
+def train_driver_fn(config):
+    print(f"[INFO] trainer_driver_fn called with num_workers={config['num_workers']}")
+    trainer = ray.train.torch.TorchTrainer(
+        train_loop_per_worker = partial(train_fn_per_worker, data_dir = config['data_dir']),
+        train_loop_config = config['train_loop_config'],
+        scaling_config = ray.train.ScalingConfig(
+            num_workers = config['num_workers'],
+            use_gpu = True
+        ),
+        run_config=ray.train.RunConfig(
+            name=f"train-trial_id={ray.tune.get_context().get_trial_id()}",
+            # callbacks=[TuneReportCallback()], # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ),
+    )
+    trainer.fit()
+
 def main():
     ray.shutdown()
-    ray.init()
+    ray.init(logging_level=logging.DEBUG)
     split_datadir, sample_datadir = data_deploy(DATA_DIR)
 
     config = {
-        "conv_block_count": tune.choice([1, 2, 3, 4]), # >5 image becomes 0
-        "dense_layer_count": tune.choice([1, 2, 3, 4]),
-        "num_units": tune.choice([1024, 2048, 4096, 8192]),
-        "background_augmentation": tune.choice([["pure", "origin"], ["noise", "origin"], ["noise", "pure", "origin"]]),
-        "batch_size": tune.choice([16, 32, 64]),
-        "lr": tune.loguniform(1e-6, 1e-3),
+        "num_workers": NUM_WORKER_PER_TRIAL, # Allocation 2 workers per trial
+        "train_loop_config": {
+            "conv_block_count": tune.choice([1, 2, 3, 4]), # >5 image becomes 0
+            "dense_layer_count": tune.choice([1, 2, 3, 4]),
+            "num_units": tune.choice([1024, 2048, 4096, 8192]),
+            "background_augmentation": tune.choice([["pure", "origin"], ["noise", "origin"], ["noise", "pure", "origin"]]),
+            "batch_size": tune.choice([16, 32, 64]),
+            "lr": tune.loguniform(1e-6, 1e-3),
+        },
         "data_dir": split_datadir,
         }
 
@@ -466,34 +490,28 @@ def main():
 
     tuner = None
     try:
+        # TODO: ADD a tuner restoration
         tuner = tune.Tuner.restore(os.path.join(EXPERIMENT_DIR, EXPERIMENT_NAME),
-                                   trainable=partial(train_model, data_dir=split_datadir),
+                                   trainable=tune.with_resources(train_driver_fn, RESROUCES),
                                    )
     except Exception as e:
         print(f"\033[31m[WARNING]\033[0m Attempt to restore *tuner* failed, with error msg: {e}")
 
     if not tuner:
-        trainer = TorchTrainer(
-            train_loop_per_worker=tune.with_resources(
-                partial(train_model, data_dir=split_datadir),
-                resources=RESROUCES, # This is resources per trial. If too much resources are allocated, ray won't allocate any resources
-            ),
-            scaling_config=ray.train.ScalingConfig(num_workers=4, use_gpu=True),
-        )
         tuner = tune.Tuner(
-            trainable=trainer,            
-            param_space=config, # Use either random sampling primitives to specify distribution or use grid search
+            trainable=tune.with_resources(train_driver_fn, RESROUCES),
+            param_space=config,
             run_config=tune.RunConfig(
                 storage_path=storage_dir,
-                name=EXPERIMENT_NAME, # Experiment info will be saved persistently in storage_dir/name
+                name=EXPERIMENT_NAME,
                 failure_config=ray.air.config.FailureConfig(
-                    max_failures = -1 # Experiment will retry again and again
+                    max_failures = -1
                 )
             ),
             tune_config=tune.TuneConfig(
                 search_alg=init_searchalg,
                 num_samples=10,
-                scheduler=scheduler, # Use scheduler to manage stopping
+                scheduler=scheduler,
                 metric='test_accuracy',
                 mode='max',
                 max_concurrent_trials=MAX_COUNCURRENT_TRIALS,
